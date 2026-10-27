@@ -1,0 +1,17 @@
+site_name: vasp-deb
+site_description: Build local Debian packages from licensed VASP distributions.
+site_url: https://pbenner.github.io/vasp-deb/
+repo_url: https://github.com/pbenner/vasp-deb
+edit_uri: edit/main/docs/
+docs_dir: docs
+site_dir: site
+strict: true
+theme:
+  name: readthedocs
+nav:
+  - Home: index.md
+  - Usage: usage.md
+  - Small silicon test: smoke-test.md
+  - Troubleshooting: troubleshooting.md
+  - Development: development.md
+  - GitHub Pages: publishing.md

@@ -1,0 +1,33 @@
+# Explicit fallback for Debian 13 (trixie), GCC/GFortran 14, OpenMPI 5,
+# FFTW 3, LP64 OpenBLAS and ScaLAPACK. Not a cross-distribution ABI guarantee.
+# Use with --shlibs-local only when these match the build/installation stack.
+# Normal installed symbols/shlibs metadata is preferable. Unknown libraries
+# still cause an error; the scanner is never told to ignore missing metadata.
+# Floors below target the Debian 13 baseline, not per-binary symbol minima.
+# Package identities: https://packages.debian.org/trixie/
+libc 6 libc6 (>= 2.41)
+libm 6 libc6 (>= 2.41)
+libmvec 1 libc6 (>= 2.41)
+libdl 2 libc6 (>= 2.41)
+libpthread 0 libc6 (>= 2.41)
+librt 1 libc6 (>= 2.41)
+libstdc++ 6 libstdc++6 (>= 14)
+libgcc_s 1 libgcc-s1 (>= 14)
+libgfortran 5 libgfortran5 (>= 14)
+libquadmath 0 libquadmath0 (>= 14)
+libgomp 1 libgomp1 (>= 14)
+libatomic 1 libatomic1 (>= 14)
+libmpi 40 libopenmpi40 (>= 5.0.7)
+libmpi_mpifh 40 libopenmpi40 (>= 5.0.7)
+libmpi_mpifh-gfortran 40 libopenmpi40 (>= 5.0.7)
+libmpi_usempi_ignore_tkr 40 libopenmpi40 (>= 5.0.7)
+libmpi_usempi_ignore_tkr-gfortran 40 libopenmpi40 (>= 5.0.7)
+libmpi_usempif08 40 libopenmpi40 (>= 5.0.7)
+libmpi_usempif08-gfortran 40 libopenmpi40 (>= 5.0.7)
+libfftw3 3 libfftw3-double3 (>= 3.3.10)
+libfftw3_omp 3 libfftw3-double3 (>= 3.3.10)
+libfftw3_threads 3 libfftw3-double3 (>= 3.3.10)
+libopenblas 0 libopenblas0 (>= 0.3.29)
+libscalapack-openmpi 2.2 libscalapack-openmpi2.2 (>= 2.2.1)
+libblas 3 libblas3
+liblapack 3 liblapack3
