@@ -26,7 +26,7 @@ sudo apt install ./dist/vasp_6.5.0-local1_amd64.deb
 Replace the archive path/version as needed. Packages and logs go to `./dist`.
 The package installs `vasp_std`, `vasp_gam`, and `vasp_ncl`; potential datasets
 are supplied separately. For other environments, omit `--dependency-profile`
-and follow the [setup guide](docs/usage.md).
+and follow the [setup guide](https://pbenner.github.io/vasp-deb/usage/).
 
 ## Verify installation
 
@@ -34,7 +34,8 @@ and follow the [setup guide](docs/usage.md).
 vasp-deb verify /path/to/Si/POTCAR
 ```
 
-Runs the [small silicon test](docs/smoke-test.md) with your Si PAW-PBE potential.
+Runs the [small silicon test](https://pbenner.github.io/vasp-deb/smoke-test/)
+with your Si PAW-PBE potential.
 
 ## Package existing binaries
 
@@ -42,5 +43,6 @@ Runs the [small silicon test](docs/smoke-test.md) with your Si PAW-PBE potential
 vasp-deb package /path/to/vasp/bin --upstream-version 6.5.0
 ```
 
-See the [documentation](docs/index.md) for prerequisites, custom compilers,
-troubleshooting, and GitHub Pages setup. Run `vasp-deb build --help` for options.
+See the [documentation](https://pbenner.github.io/vasp-deb/) for prerequisites,
+custom compilers, troubleshooting, and GitHub Pages setup.
+Run `vasp-deb build --help` for options.
