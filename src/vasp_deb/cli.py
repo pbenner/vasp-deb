@@ -65,14 +65,31 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--jobs", "-j", type=int, default=min(os.cpu_count() or 1, 4))
         else:
             command.add_argument(
-                "bin_dir", type=Path, help="directory containing vasp_std, vasp_gam, vasp_ncl"
+                "bin_dir", type=Path, help="binary directory or archive containing bin/vasp_*"
             )
-        command.add_argument("--upstream-version", required=name == "package")
+            command.add_argument(
+                "--bundle-runtime",
+                action="append",
+                default=[],
+                metavar="DIRECTORY",
+                help="include a sibling runtime directory (e.g. hpc_sdk), preserving relative paths",
+            )
+            command.add_argument(
+                "--mpi-prefix",
+                metavar="RELATIVE_PATH",
+                help="Open MPI prefix within a bundled runtime; generate relocation-aware launchers",
+            )
+        command.add_argument("--upstream-version")
         command.add_argument("--revision", default="local1")
         command.add_argument(
             "--package-name",
             default="vasp",
-            help="name of the generated Debian package (default: vasp)",
+            help="Debian package name prefix; the upstream version is appended (default: vasp)",
+        )
+        command.add_argument(
+            "--access-group",
+            help="authorized Unix group (default: versioned name with punctuation changed to '-'); "
+            "created on installation",
         )
         command.add_argument("--maintainer", default="Local administrator <root@localhost>")
         command.add_argument(

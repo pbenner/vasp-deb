@@ -102,6 +102,7 @@ class DistributionTests(unittest.TestCase):
         for name in (
             "dist/private.deb",
             "reference/private.tgz",
+            "packages/vasp-6.6.0-gpu-a_h_100.tar.gz",
             ".venv/private.txt",
             ".work/private.txt",
             "build.log",
@@ -153,7 +154,8 @@ class DistributionTests(unittest.TestCase):
         for name in names:
             parts = Path(name).parts
             self.assertFalse(
-                {"dist", "reference", ".venv", ".work", "__pycache__"} & set(parts), name
+                {"dist", "reference", "packages", ".venv", ".work", "__pycache__"} & set(parts),
+                name,
             )
             self.assertFalse(name.endswith((".deb", ".tgz", ".log", ".pyc", "private.txt")), name)
             self.assertFalse(Path(name).name.startswith("POTCAR"), name)

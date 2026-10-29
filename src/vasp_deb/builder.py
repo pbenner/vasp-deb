@@ -20,6 +20,7 @@ from typing import TextIO
 
 from ._version import __version__ as TOOL_VERSION
 from .errors import PackagingError
+from .payload import copy_runtime, extract_binaries, mpi_launchers, validate_runtime_names
 
 VARIANTS = ("std", "gam", "ncl")
 ELF_ARCHITECTURES = {
@@ -116,7 +117,11 @@ def infer_version(archive: Path, source: Path) -> str:
             filename = filename[: -len(suffix)]
             break
     for name in (source.name, filename):
-        match = re.fullmatch(r"vasp[._-](\d+(?:\.\d+)+(?:[+~][A-Za-z0-9.+~]+)?)", name, re.I)
+        match = re.fullmatch(
+            r"vasp[._-](\d+(?:\.\d+)+(?:[+~][A-Za-z0-9.+~]+)?)(?:-[A-Za-z0-9_-]+)?",
+            name,
+            re.I,
+        )
         if match:
             return match.group(1)
     raise PackagingError(
@@ -270,6 +275,8 @@ def recovery_command(args: argparse.Namespace, binary_dir: Path, upstream: str) 
         args.revision,
         "--package-name",
         args.package_name,
+        "--access-group",
+        args.access_group or default_access_group(args, upstream),
         "--maintainer",
         args.maintainer,
         "--variants",
@@ -296,7 +303,19 @@ def recovery_command(args: argparse.Namespace, binary_dir: Path, upstream: str) 
         command.append("--no-auto-depends")
     if args.overwrite:
         command.append("--overwrite")
+    for runtime in getattr(args, "bundle_runtime", []):
+        command.extend(["--bundle-runtime", runtime])
+    if getattr(args, "mpi_prefix", None):
+        command.extend(["--mpi-prefix", args.mpi_prefix])
     return command
+
+
+def package_identity(args: argparse.Namespace, upstream: str) -> str:
+    return f"{args.package_name}-{upstream.lower().replace('~', '-')}"
+
+
+def default_access_group(args: argparse.Namespace, upstream: str) -> str:
+    return re.sub(r"[^a-z0-9_-]", "-", package_identity(args, upstream))
 
 
 def install_metadata(
@@ -309,7 +328,10 @@ def install_metadata(
 ) -> None:
     control = stage / "DEBIAN"
     control.mkdir()
-    docs = stage / "usr/share/doc" / args.package_name
+    package_name = info["package"]
+    private_path = f"/usr/lib/{package_name}"
+    group = info["access_group"]
+    docs = stage / "usr/share/doc" / package_name
     docs.mkdir(parents=True)
     (docs / "copyright").write_text(
         "Upstream: Vienna Ab initio Simulation Package (VASP)\n"
@@ -317,25 +339,36 @@ def install_metadata(
         " see the licensed upstream distribution for full notices.\n"
         "License: Proprietary; governed by the user's VASP license agreement.\n"
         "This locally generated package grants no additional use or redistribution rights.\n"
-        "It does not include source code or pseudopotential/PAW datasets.\n"
+        "It does not include VASP source code or pseudopotential/PAW datasets.\n"
     )
     if args.copyright_file:
         shutil.copyfile(args.copyright_file, docs / "copyright")
     (docs / "README.Debian").write_text(
         "Locally built VASP executables. Use requires an appropriate VASP license.\n"
-        "Use vasp_std, vasp_gam or vasp_ncl as selected during packaging.\n"
+        f"Commands are in {info['command_directory']}; add this directory to PATH\n"
+        f"or use the versioned commands: {', '.join(info['commands'])}.\n"
         "Potential datasets are configured separately and are not included.\n"
-        "This package does not change MPI, OpenMP, stack limits or user groups.\n"
+        f"Installation creates the Unix group {group} if needed, with no new members.\n"
+        "Only root and members of that group may access the installed payload.\n"
+        "Administrators must verify license eligibility before adding users.\n"
+        "Bundled MPI launchers set relocation paths for their own processes only.\n"
+        "OpenMP and stack limits remain under administrator/user control.\n"
         "Run the upstream validation suite in your licensed build environment\n"
         "before relying on the build for scientific calculations.\n"
         "Build provenance is recorded in build-info.json.\n"
     )
     (docs / "build-info.json").write_text(json.dumps(info, indent=2, sort_keys=True) + "\n")
     for path in stage.rglob("*"):
-        path.chmod(0o755 if path.is_dir() or path.parent == stage / "usr/bin" else 0o644)
-    size = sum(path.stat().st_size for path in stage.rglob("*") if path.is_file())
+        if not path.is_symlink():
+            path.chmod(0o755 if path.is_dir() or path.stat().st_mode & 0o111 else 0o644)
+    # Root-only in the archive: unpacking, failed configuration, and upgrades
+    # never expose licensed files to all users while awaiting postinst.
+    (stage / private_path.lstrip("/")).chmod(0o700)
+    size = sum(
+        path.stat().st_size for path in stage.rglob("*") if not path.is_symlink() and path.is_file()
+    )
     fields = [
-        f"Package: {args.package_name}",
+        f"Package: {package_name}",
         f"Version: {version}",
         "Section: non-free/science",
         "Priority: optional",
@@ -343,18 +376,19 @@ def install_metadata(
         f"Maintainer: {args.maintainer}",
         f"Installed-Size: {(size + 1023) // 1024}",
     ]
-    if dependencies:
-        fields.append("Depends: " + dependencies)
+    fields.append("Depends: " + ", ".join(filter(None, ["adduser", dependencies])))
     fields.extend(
         [
             "Description: Locally built Vienna Ab initio Simulation Package",
             " VASP executables compiled or supplied locally for licensed use.",
-            " Source code and potential datasets are not included.",
+            " VASP source code and potential datasets are not included.",
         ]
     )
     (control / "control").write_text("\n".join(fields) + "\n")
     payload = sorted(
-        path for path in stage.rglob("*") if path.is_file() and control not in path.parents
+        path
+        for path in stage.rglob("*")
+        if not path.is_symlink() and path.is_file() and control not in path.parents
     )
     (control / "md5sums").write_text(
         "".join(
@@ -363,6 +397,17 @@ def install_metadata(
     )
     for path in control.iterdir():
         path.chmod(0o644)
+    (control / "postinst").write_text(
+        "#!/bin/sh\nset -eu\n"
+        'case "$1" in\n  configure)\n'
+        f"    if ! getent group {shlex.quote(group)} >/dev/null; then\n"
+        f"      addgroup --system {shlex.quote(group)}\n"
+        "    fi\n"
+        f"    chown root:{shlex.quote(group)} {shlex.quote(private_path)}\n"
+        f"    chmod 0750 {shlex.quote(private_path)}\n"
+        "    ;;\nesac\n"
+    )
+    (control / "postinst").chmod(0o755)
     if "SOURCE_DATE_EPOCH" in os.environ:
         try:
             epoch = int(os.environ["SOURCE_DATE_EPOCH"])
@@ -405,6 +450,23 @@ def package(args: argparse.Namespace) -> Path:
         raise PackagingError("--no-auto-depends requires an explicit --depends declaration")
     if len(set(args.variants)) != len(args.variants):
         raise PackagingError("duplicate variants are not allowed")
+    runtimes = getattr(args, "bundle_runtime", [])
+    mpi_prefix = getattr(args, "mpi_prefix", None)
+    validate_runtime_names(runtimes)
+    if mpi_prefix:
+        relative = PurePosixPath(mpi_prefix)
+        if (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or not relative.parts
+            or relative.parts[0] not in runtimes
+        ):
+            raise PackagingError("--mpi-prefix must be a relative path inside a bundled runtime")
+    if runtimes and not args.no_auto_depends:
+        raise PackagingError(
+            "bundled runtimes require --no-auto-depends and explicit --depends for the target "
+            "system libraries and GPU driver; Debian metadata cannot describe a private SDK"
+        )
     for path in (args.shlibs_local, args.copyright_file, getattr(args, "makefile_include", None)):
         if path is not None and not path.is_file():
             raise PackagingError(f"input file does not exist: {path}")
@@ -451,8 +513,22 @@ def package(args: argparse.Namespace) -> Path:
                 )
                 binary_dir = source / "bin"
             else:
-                upstream = args.upstream_version
-                binary_dir = args.bin_dir.resolve()
+                if args.bin_dir.is_file():
+                    print("Extracting prebuilt binaries and selected runtimes...", flush=True)
+                    binary_dir = extract_binaries(args.bin_dir, work / "prebuilt", runtimes)
+                    upstream = args.upstream_version or infer_version(
+                        args.bin_dir, binary_dir.parent
+                    )
+                    info.update(
+                        binary_archive=args.bin_dir.name, binary_archive_sha256=digest(args.bin_dir)
+                    )
+                else:
+                    binary_dir = args.bin_dir.resolve()
+                    if not args.upstream_version:
+                        raise PackagingError(
+                            "--upstream-version is required for a binary directory"
+                        )
+                    upstream = args.upstream_version
             single_line(upstream, "upstream version")
             single_line(args.revision, "Debian revision")
             if not re.fullmatch(r"[0-9][A-Za-z0-9.+~]*", upstream):
@@ -462,8 +538,18 @@ def package(args: argparse.Namespace) -> Path:
             if not re.fullmatch(r"[A-Za-z0-9+.~]+", args.revision):
                 raise PackagingError("invalid Debian revision")
             version = f"{upstream}-{args.revision}"
+            package_name = package_identity(args, upstream)
+            access_group = args.access_group or default_access_group(args, upstream)
+            if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}", access_group):
+                raise PackagingError(
+                    "--access-group must be a Unix group name of at most 32 characters"
+                )
+            if access_group in ("root", "sudo", "adm", "users", "nogroup"):
+                raise PackagingError(
+                    "--access-group must be a dedicated group for licensed VASP users"
+                )
             capture(["dpkg", "--validate-version", version], log)
-            destination = output / f"{args.package_name}_{version}_{architecture}.deb"
+            destination = output / f"{package_name}_{version}_{architecture}.deb"
             if destination.exists() and not args.overwrite:
                 raise PackagingError(f"output exists: {destination}; use --overwrite to replace it")
             if args.command == "build":
@@ -472,11 +558,21 @@ def package(args: argparse.Namespace) -> Path:
                         "Checking GNU runtime dependency metadata before compilation...", flush=True
                     )
                     dependency_preflight(args, work, log)
+                # Supplied archives can contain objects from another compiler
+                # (e.g. the GPU archive). Always compile into clean build/bin trees.
+                for name in ("build", "bin"):
+                    path = source / name
+                    if path.is_symlink():
+                        path.unlink()
+                    elif path.exists():
+                        shutil.rmtree(path)
+                    path.mkdir()
                 for variant in args.variants:
                     print(f"Building {variant} with {args.jobs} job(s)...", flush=True)
                     run_build(["make", "DEPS=1", f"-j{args.jobs}", variant], source, log)
             stage = work / "package"
-            binaries_path = stage / "usr/bin"
+            private = stage / "usr/lib" / package_name
+            binaries_path = private / "bin"
             binaries_path.mkdir(parents=True)
             binaries = []
             binary_hashes = {}
@@ -488,10 +584,32 @@ def package(args: argparse.Namespace) -> Path:
                 target.chmod(0o755)
                 binaries.append(target)
                 binary_hashes[target.name] = digest(target)
+            for runtime in runtimes:
+                print(f"Including runtime directory: {runtime}", flush=True)
+                copy_runtime(binary_dir.parent / runtime, private / runtime)
+            commands = stage / "usr/bin"
+            commands.mkdir(parents=True)
+            launch = (
+                mpi_launchers(private, mpi_prefix, args.variants) if mpi_prefix else binaries_path
+            )
+            command_names = []
+            for variant in args.variants:
+                name = f"{args.package_name}_{variant}-{upstream}"
+                (commands / name).symlink_to(f"../lib/{package_name}/{launch.name}/vasp_{variant}")
+                command_names.append(name)
+            if mpi_prefix:
+                name = f"{args.package_name}_mpirun-{upstream}"
+                (commands / name).symlink_to(f"../lib/{package_name}/launch/mpirun")
+                command_names.append(name)
             recovery = recovery_command(args, binaries_path, upstream)
             dependencies = runtime_dependencies(binaries, args, work, log)
             info.update(
-                package=args.package_name,
+                package=package_name,
+                access_group=access_group,
+                commands=command_names,
+                command_directory=f"/usr/lib/{package_name}/{launch.name}",
+                bundled_runtimes=runtimes,
+                mpi_prefix=mpi_prefix,
                 version=version,
                 depends=dependencies,
                 binaries_sha256=binary_hashes,
@@ -511,7 +629,19 @@ def package(args: argparse.Namespace) -> Path:
                 info["dependency_profile"] = args.dependency_profile
             install_metadata(stage, args, version, architecture, dependencies, info)
             built = work / "result.deb"
-            capture(["dpkg-deb", "--root-owner-group", "--build", str(stage), str(built)], log)
+            capture(
+                [
+                    "dpkg-deb",
+                    "--root-owner-group",
+                    "--threads-max=4",
+                    "-Zzstd",
+                    "-z3",
+                    "--build",
+                    str(stage),
+                    str(built),
+                ],
+                log,
+            )
             publish_package(built, destination, args.overwrite)
             print(f"Created: {destination}", flush=True)
             print(
